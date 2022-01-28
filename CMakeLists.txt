@@ -9,7 +9,7 @@ set(SOURCE_FILES glad.c snakes GL GLU glfw3 X11 Xxf86vm Xrandr pthread Xi dl Xin
 add_executable(snakes main.cpp glad.c game.cpp game.h)
 set(SOURCE_FILES glad.c main.cpp)
 find_package(OpenGL REQUIRED)
-find_package(glfw3 3.3 REQUIRED)
+
 find_package(GLEW REQUIRED)
 find_package(GLUT REQUIRED)
 include_directories(${OPENGL_INCLUDE_DIRS} ${GLUT_INCLUDE_DIRS})
