@@ -67,7 +67,65 @@ void display_callback()
         exit(0);
 
     }
+//point to variable that stores snake direction in game.cpp
+extern short sDirection;
+//boolean expression to end game
+bool gameOver = false;
+int score = 0;
+//message box
 
+void display_callback();
+void reshape_callback(int, int );
+void timer_callback(int);
+void keyboard_callback(int, int, int);
+
+
+void init(){
+    glClearColor(0.0, 0.0, 0.0, 1.0);
+    initGrid(COLUMNS, ROWS);
+
+}
+
+int main( int argc, char  **argv) {
+    //initialise glut and display mode and window size
+    glutInit(&argc,argv);
+    //double buffer window
+    glutInitDisplayMode(GLUT_RGB | GLUT_DOUBLE);
+
+    glutInitWindowSize(500, 500);
+    glutCreateWindow("KENYAN SNAKE");
+    glutDisplayFunc(display_callback);
+    glutReshapeFunc(reshape_callback);
+    glutTimerFunc(0, timer_callback, 0);
+    glutSpecialFunc(keyboard_callback);
+    init();
+    glutMainLoop();
+
+    return 0;
+}
+//int index =0;
+void display_callback()
+{
+    glClear(GL_COLOR_BUFFER_BIT);
+    drawGrid();
+    drawSnake();
+    drawFood();
+    glutSwapBuffers();
+    //should show message box but idk how to do that on linux yet
+    if (gameOver){
+
+        char _score[10];
+        itoa(score, _score,10);
+        char text[50] = "Your score is: ";
+        strcat(text, _score);
+        MessageBox(NULL, text, "GAME OVER");
+        exit(0);
+
+    }
+
+
+
+}
 
 
 }
