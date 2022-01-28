@@ -107,6 +107,26 @@ void display_callback()
         exit(0);
 
     }
+    
+    void display_callback()
+{
+    glClear(GL_COLOR_BUFFER_BIT);
+    drawGrid();
+    drawSnake();
+    drawFood();
+    glutSwapBuffers();
+    //should show message box but idk how to do that on linux yet
+    if (gameOver){
+
+        char _score[10];
+        itoa(score, _score,10);
+        char text[50] = "Your score is: ";
+        strcat(text, _score);
+        MessageBox(NULL, text, "GAME OVER");
+        exit(0);
+
+    }
+
 
 //used to set viewport
 void reshape_callback(int w, int h){
