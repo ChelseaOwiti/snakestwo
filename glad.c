@@ -1459,6 +1459,456 @@ static void load_GL_VERSION_1_0(GLADloadproc load) {
 	glad_glRasterPos4s = (PFNGLRASTERPOS4SPROC)load("glRasterPos4s");
 	glad_glRasterPos4sv = (PFNGLRASTERPOS4SVPROC)load("glRasterPos4sv");
 	glad_glRectd = (PFNGLRECTDPROC)load("glRectd");
+	
+	
+	static void* get_proc(const char *namez);
+
+#if defined(_WIN32) || defined(__CYGWIN__)
+#ifndef _WINDOWS_
+#undef APIENTRY
+#endif
+#include <windows.h>
+static HMODULE libGL;
+
+typedef void* (APIENTRYP PFNWGLGETPROCADDRESSPROC_PRIVATE)(const char*);
+static PFNWGLGETPROCADDRESSPROC_PRIVATE gladGetProcAddressPtr;
+
+#ifdef _MSC_VER
+#ifdef __has_include
+  #if __has_include(<winapifamily.h>)
+    #define HAVE_WINAPIFAMILY 1
+  #endif
+#elif _MSC_VER >= 1700 && !_USING_V110_SDK71_
+  #define HAVE_WINAPIFAMILY 1
+#endif
+#endif
+
+#ifdef HAVE_WINAPIFAMILY
+  #include <winapifamily.h>
+  #if !WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP) && WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_APP)
+    #define IS_UWP 1
+  #endif
+#endif
+
+static
+int open_gl(void) {
+#ifndef IS_UWP
+    libGL = LoadLibraryW(L"opengl32.dll");
+    if(libGL != NULL) {
+        void (* tmp)(void);
+        tmp = (void(*)(void)) GetProcAddress(libGL, "wglGetProcAddress");
+        gladGetProcAddressPtr = (PFNWGLGETPROCADDRESSPROC_PRIVATE) tmp;
+        return gladGetProcAddressPtr != NULL;
+    }
+#endif
+
+    return 0;
+}
+
+static
+void close_gl(void) {
+    if(libGL != NULL) {
+        FreeLibrary((HMODULE) libGL);
+        libGL = NULL;
+    }
+}
+#else
+#include <dlfcn.h>
+static void* libGL;
+
+#if !defined(__APPLE__) && !defined(__HAIKU__)
+typedef void* (APIENTRYP PFNGLXGETPROCADDRESSPROC_PRIVATE)(const char*);
+static PFNGLXGETPROCADDRESSPROC_PRIVATE gladGetProcAddressPtr;
+#endif
+
+static
+int open_gl(void) {
+#ifdef __APPLE__
+    static const char *NAMES[] = {
+        "../Frameworks/OpenGL.framework/OpenGL",
+        "/Library/Frameworks/OpenGL.framework/OpenGL",
+        "/System/Library/Frameworks/OpenGL.framework/OpenGL",
+        "/System/Library/Frameworks/OpenGL.framework/Versions/Current/OpenGL"
+    };
+#else
+    static const char *NAMES[] = {"libGL.so.1", "libGL.so"};
+#endif
+
+    unsigned int index = 0;
+    for(index = 0; index < (sizeof(NAMES) / sizeof(NAMES[0])); index++) {
+        libGL = dlopen(NAMES[index], RTLD_NOW | RTLD_GLOBAL);
+
+        if(libGL != NULL) {
+#if defined(__APPLE__) || defined(__HAIKU__)
+            return 1;
+#else
+            gladGetProcAddressPtr = (PFNGLXGETPROCADDRESSPROC_PRIVATE)dlsym(libGL,
+                "glXGetProcAddressARB");
+            return gladGetProcAddressPtr != NULL;
+#endif
+        }
+    }
+
+    return 0;
+}
+
+static
+void close_gl(void) {
+    if(libGL != NULL) {
+        dlclose(libGL);
+        libGL = NULL;
+    }
+}
+#endif
+
+static
+void* get_proc(const char *namez) {
+    void* result = NULL;
+    if(libGL == NULL) return NULL;
+
+#if !defined(__APPLE__) && !defined(__HAIKU__)
+    if(gladGetProcAddressPtr != NULL) {
+        result = gladGetProcAddressPtr(namez);
+    }
+#endif
+    if(result == NULL) {
+#if defined(_WIN32) || defined(__CYGWIN__)
+        result = (void*)GetProcAddress((HMODULE) libGL, namez);
+#else
+        result = dlsym(libGL, namez);
+#endif
+    }
+
+    return result;
+}
+
+int gladLoadGL(void) {
+    int status = 0;
+
+    if(open_gl()) {
+        status = gladLoadGLLoader(&get_proc);
+        close_gl();
+    }
+
+    return status;
+}
+
+struct gladGLversionStruct GLVersion = { 0, 0 };
+
+#if defined(GL_ES_VERSION_3_0) || defined(GL_VERSION_3_0)
+#define _GLAD_IS_SOME_NEW_VERSION 1
+#endif
+
+static int max_loaded_major;
+static int max_loaded_minor;
+
+static const char *exts = NULL;
+static int num_exts_i = 0;
+static char **exts_i = NULL;
+
+static int get_exts(void) {
+#ifdef _GLAD_IS_SOME_NEW_VERSION
+    if(max_loaded_major < 3) {
+#endif
+        exts = (const char *)glGetString(GL_EXTENSIONS);
+#ifdef _GLAD_IS_SOME_NEW_VERSION
+    } else {
+        unsigned int index;
+
+        num_exts_i = 0;
+        glGetIntegerv(GL_NUM_EXTENSIONS, &num_exts_i);
+        if (num_exts_i > 0) {
+            exts_i = (char **)malloc((size_t)num_exts_i * (sizeof *exts_i));
+        }
+
+        if (exts_i == NULL) {
+            return 0;
+        }
+
+        for(index = 0; index < (unsigned)num_exts_i; index++) {
+            const char *gl_str_tmp = (const char*)glGetStringi(GL_EXTENSIONS, index);
+            size_t len = strlen(gl_str_tmp);
+
+            char *local_str = (char*)malloc((len+1) * sizeof(char));
+            if(local_str != NULL) {
+                memcpy(local_str, gl_str_tmp, (len+1) * sizeof(char));
+            }
+            exts_i[index] = local_str;
+        }
+    }
+#endif
+    return 1;
+}
+
+static void free_exts(void) {
+    if (exts_i != NULL) {
+        int index;
+        for(index = 0; index < num_exts_i; index++) {
+            free((char *)exts_i[index]);
+        }
+        free((void *)exts_i);
+        exts_i = NULL;
+    }
+}
+
+static int has_ext(const char *ext) {
+#ifdef _GLAD_IS_SOME_NEW_VERSION
+    if(max_loaded_major < 3) {
+#endif
+        const char *extensions;
+        const char *loc;
+        const char *terminator;
+        extensions = exts;
+        if(extensions == NULL || ext == NULL) {
+            return 0;
+        }
+
+        while(1) {
+            loc = strstr(extensions, ext);
+            if(loc == NULL) {
+                return 0;
+            }
+
+            terminator = loc + strlen(ext);
+            if((loc == extensions || *(loc - 1) == ' ') &&
+                (*terminator == ' ' || *terminator == '\0')) {
+                return 1;
+            }
+            extensions = terminator;
+        }
+#ifdef _GLAD_IS_SOME_NEW_VERSION
+    } else {
+        int index;
+        if(exts_i == NULL) return 0;
+        for(index = 0; index < num_exts_i; index++) {
+            const char *e = exts_i[index];
+
+            if(exts_i[index] != NULL && strcmp(e, ext) == 0) {
+                return 1;
+            }
+        }
+    }
+#endif
+
+    return 0;
+}
+int GLAD_GL_VERSION_1_0 = 0;
+int GLAD_GL_VERSION_1_1 = 0;
+int GLAD_GL_VERSION_1_2 = 0;
+int GLAD_GL_VERSION_1_3 = 0;
+int GLAD_GL_VERSION_1_4 = 0;
+int GLAD_GL_VERSION_1_5 = 0;
+int GLAD_GL_VERSION_2_0 = 0;
+int GLAD_GL_VERSION_2_1 = 0;
+int GLAD_GL_VERSION_3_0 = 0;
+int GLAD_GL_VERSION_3_1 = 0;
+int GLAD_GL_VERSION_3_2 = 0;
+int GLAD_GL_VERSION_3_3 = 0;
+int GLAD_GL_VERSION_4_0 = 0;
+int GLAD_GL_VERSION_4_1 = 0;
+int GLAD_GL_VERSION_4_2 = 0;
+int GLAD_GL_VERSION_4_3 = 0;
+int GLAD_GL_VERSION_4_4 = 0;
+int GLAD_GL_VERSION_4_5 = 0;
+int GLAD_GL_VERSION_4_6 = 0;
+PFNGLACCUMPROC glad_glAccum = NULL;
+PFNGLACTIVESHADERPROGRAMPROC glad_glActiveShaderProgram = NULL;
+PFNGLACTIVETEXTUREPROC glad_glActiveTexture = NULL;
+PFNGLALPHAFUNCPROC glad_glAlphaFunc = NULL;
+PFNGLARETEXTURESRESIDENTPROC glad_glAreTexturesResident = NULL;
+PFNGLARRAYELEMENTPROC glad_glArrayElement = NULL;
+PFNGLATTACHSHADERPROC glad_glAttachShader = NULL;
+PFNGLBEGINPROC glad_glBegin = NULL;
+PFNGLBEGINCONDITIONALRENDERPROC glad_glBeginConditionalRender = NULL;
+PFNGLBEGINQUERYPROC glad_glBeginQuery = NULL;
+PFNGLBEGINQUERYINDEXEDPROC glad_glBeginQueryIndexed = NULL;
+PFNGLBEGINTRANSFORMFEEDBACKPROC glad_glBeginTransformFeedback = NULL;
+PFNGLBINDATTRIBLOCATIONPROC glad_glBindAttribLocation = NULL;
+PFNGLBINDBUFFERPROC glad_glBindBuffer = NULL;
+PFNGLBINDBUFFERBASEPROC glad_glBindBufferBase = NULL;
+PFNGLBINDBUFFERRANGEPROC glad_glBindBufferRange = NULL;
+PFNGLBINDBUFFERSBASEPROC glad_glBindBuffersBase = NULL;
+PFNGLBINDBUFFERSRANGEPROC glad_glBindBuffersRange = NULL;
+PFNGLBINDFRAGDATALOCATIONPROC glad_glBindFragDataLocation = NULL;
+PFNGLBINDFRAGDATALOCATIONINDEXEDPROC glad_glBindFragDataLocationIndexed = NULL;
+PFNGLBINDFRAMEBUFFERPROC glad_glBindFramebuffer = NULL;
+PFNGLBINDIMAGETEXTUREPROC glad_glBindImageTexture = NULL;
+PFNGLBINDIMAGETEXTURESPROC glad_glBindImageTextures = NULL;
+PFNGLBINDPROGRAMPIPELINEPROC glad_glBindProgramPipeline = NULL;
+PFNGLBINDRENDERBUFFERPROC glad_glBindRenderbuffer = NULL;
+PFNGLBINDSAMPLERPROC glad_glBindSampler = NULL;
+PFNGLBINDSAMPLERSPROC glad_glBindSamplers = NULL;
+PFNGLBINDTEXTUREPROC glad_glBindTexture = NULL;
+PFNGLBINDTEXTUREUNITPROC glad_glBindTextureUnit = NULL;
+PFNGLBINDTEXTURESPROC glad_glBindTextures = NULL;
+PFNGLBINDTRANSFORMFEEDBACKPROC glad_glBindTransformFeedback = NULL;
+PFNGLBINDVERTEXARRAYPROC glad_glBindVertexArray = NULL;
+PFNGLBINDVERTEXBUFFERPROC glad_glBindVertexBuffer = NULL;
+PFNGLBINDVERTEXBUFFERSPROC glad_glBindVertexBuffers = NULL;
+PFNGLBITMAPPROC glad_glBitmap = NULL;
+PFNGLBLENDCOLORPROC glad_glBlendColor = NULL;
+PFNGLBLENDEQUATIONPROC glad_glBlendEquation = NULL;
+PFNGLBLENDEQUATIONSEPARATEPROC glad_glBlendEquationSeparate = NULL;
+PFNGLBLENDEQUATIONSEPARATEIPROC glad_glBlendEquationSeparatei = NULL;
+PFNGLBLENDEQUATIONIPROC glad_glBlendEquationi = NULL;
+PFNGLBLENDFUNCPROC glad_glBlendFunc = NULL;
+PFNGLBLENDFUNCSEPARATEPROC glad_glBlendFuncSeparate = NULL;
+PFNGLBLENDFUNCSEPARATEIPROC glad_glBlendFuncSeparatei = NULL;
+PFNGLBLENDFUNCIPROC glad_glBlendFunci = NULL;
+PFNGLBLITFRAMEBUFFERPROC glad_glBlitFramebuffer = NULL;
+PFNGLBLITNAMEDFRAMEBUFFERPROC glad_glBlitNamedFramebuffer = NULL;
+PFNGLBUFFERDATAPROC glad_glBufferData = NULL;
+PFNGLBUFFERSTORAGEPROC glad_glBufferStorage = NULL;
+PFNGLBUFFERSUBDATAPROC glad_glBufferSubData = NULL;
+PFNGLCALLLISTPROC glad_glCallList = NULL;
+PFNGLCALLLISTSPROC glad_glCallLists = NULL;
+PFNGLCHECKFRAMEBUFFERSTATUSPROC glad_glCheckFramebufferStatus = NULL;
+PFNGLCHECKNAMEDFRAMEBUFFERSTATUSPROC glad_glCheckNamedFramebufferStatus = NULL;
+PFNGLCLAMPCOLORPROC glad_glClampColor = NULL;
+PFNGLCLEARPROC glad_glClear = NULL;
+PFNGLCLEARACCUMPROC glad_glClearAccum = NULL;
+PFNGLCLEARBUFFERDATAPROC glad_glClearBufferData = NULL;
+PFNGLCLEARBUFFERSUBDATAPROC glad_glClearBufferSubData = NULL;
+PFNGLCLEARBUFFERFIPROC glad_glClearBufferfi = NULL;
+PFNGLCLEARBUFFERFVPROC glad_glClearBufferfv = NULL;
+PFNGLCLEARBUFFERIVPROC glad_glClearBufferiv = NULL;
+PFNGLCLEARBUFFERUIVPROC glad_glClearBufferuiv = NULL;
+PFNGLCLEARCOLORPROC glad_glClearColor = NULL;
+PFNGLCLEARDEPTHPROC glad_glClearDepth = NULL;
+PFNGLCLEARDEPTHFPROC glad_glClearDepthf = NULL;
+PFNGLCLEARINDEXPROC glad_glClearIndex = NULL;
+PFNGLCLEARNAMEDBUFFERDATAPROC glad_glClearNamedBufferData = NULL;
+PFNGLCLEARNAMEDBUFFERSUBDATAPROC glad_glClearNamedBufferSubData = NULL;
+PFNGLCLEARNAMEDFRAMEBUFFERFIPROC glad_glClearNamedFramebufferfi = NULL;
+PFNGLCLEARNAMEDFRAMEBUFFERFVPROC glad_glClearNamedFramebufferfv = NULL;
+PFNGLCLEARNAMEDFRAMEBUFFERIVPROC glad_glClearNamedFramebufferiv = NULL;
+PFNGLCLEARNAMEDFRAMEBUFFERUIVPROC glad_glClearNamedFramebufferuiv = NULL;
+PFNGLCLEARSTENCILPROC glad_glClearStencil = NULL;
+PFNGLCLEARTEXIMAGEPROC glad_glClearTexImage = NULL;
+PFNGLCLEARTEXSUBIMAGEPROC glad_glClearTexSubImage = NULL;
+PFNGLCLIENTACTIVETEXTUREPROC glad_glClientActiveTexture = NULL;
+PFNGLCLIENTWAITSYNCPROC glad_glClientWaitSync = NULL;
+PFNGLCLIPCONTROLPROC glad_glClipControl = NULL;
+PFNGLCLIPPLANEPROC glad_glClipPlane = NULL;
+PFNGLCOLOR3BPROC glad_glColor3b = NULL;
+PFNGLCOLOR3BVPROC glad_glColor3bv = NULL;
+PFNGLCOLOR3DPROC glad_glColor3d = NULL;
+PFNGLCOLOR3DVPROC glad_glColor3dv = NULL;
+PFNGLCOLOR3FPROC glad_glColor3f = NULL;
+PFNGLCOLOR3FVPROC glad_glColor3fv = NULL;
+PFNGLCOLOR3IPROC glad_glColor3i = NULL;
+PFNGLCOLOR3IVPROC glad_glColor3iv = NULL;
+PFNGLCOLOR3SPROC glad_glColor3s = NULL;
+PFNGLCOLOR3SVPROC glad_glColor3sv = NULL;
+PFNGLCOLOR3UBPROC glad_glColor3ub = NULL;
+PFNGLCOLOR3UBVPROC glad_glColor3ubv = NULL;
+PFNGLCOLOR3UIPROC glad_glColor3ui = NULL;
+PFNGLCOLOR3UIVPROC glad_glColor3uiv = NULL;
+PFNGLCOLOR3USPROC glad_glColor3us = NULL;
+PFNGLCOLOR3USVPROC glad_glColor3usv = NULL;
+PFNGLCOLOR4BPROC glad_glColor4b = NULL;
+PFNGLCOLOR4BVPROC glad_glColor4bv = NULL;
+PFNGLCOLOR4DPROC glad_glColor4d = NULL;
+PFNGLCOLOR4DVPROC glad_glColor4dv = NULL;
+PFNGLCOLOR4FPROC glad_glColor4f = NULL;
+PFNGLCOLOR4FVPROC glad_glColor4fv = NULL;
+PFNGLCOLOR4IPROC glad_glColor4i = NULL;
+PFNGLCOLOR4IVPROC glad_glColor4iv = NULL;
+PFNGLCOLOR4SPROC glad_glColor4s = NULL;
+PFNGLCOLOR4SVPROC glad_glColor4sv = NULL;
+PFNGLCOLOR4UBPROC glad_glColor4ub = NULL;
+PFNGLCOLOR4UBVPROC glad_glColor4ubv = NULL;
+PFNGLCOLOR4UIPROC glad_glColor4ui = NULL;
+PFNGLCOLOR4UIVPROC glad_glColor4uiv = NULL;
+PFNGLCOLOR4USPROC glad_glColor4us = NULL;
+PFNGLCOLOR4USVPROC glad_glColor4usv = NULL;
+PFNGLCOLORMASKPROC glad_glColorMask = NULL;
+PFNGLCOLORMASKIPROC glad_glColorMaski = NULL;
+PFNGLCOLORMATERIALPROC glad_glColorMaterial = NULL;
+PFNGLCOLORP3UIPROC glad_glColorP3ui = NULL;
+PFNGLCOLORP3UIVPROC glad_glColorP3uiv = NULL;
+PFNGLCOLORP4UIPROC glad_glColorP4ui = NULL;
+PFNGLCOLORP4UIVPROC glad_glColorP4uiv = NULL;
+PFNGLCOLORPOINTERPROC glad_glColorPointer = NULL;
+PFNGLCOMPILESHADERPROC glad_glCompileShader = NULL;
+PFNGLCOMPRESSEDTEXIMAGE1DPROC glad_glCompressedTexImage1D = NULL;
+PFNGLCOMPRESSEDTEXIMAGE2DPROC glad_glCompressedTexImage2D = NULL;
+PFNGLCOMPRESSEDTEXIMAGE3DPROC glad_glCompressedTexImage3D = NULL;
+PFNGLCOMPRESSEDTEXSUBIMAGE1DPROC glad_glCompressedTexSubImage1D = NULL;
+PFNGLCOMPRESSEDTEXSUBIMAGE2DPROC glad_glCompressedTexSubImage2D = NULL;
+PFNGLCOMPRESSEDTEXSUBIMAGE3DPROC glad_glCompressedTexSubImage3D = NULL;
+PFNGLCOMPRESSEDTEXTURESUBIMAGE1DPROC glad_glCompressedTextureSubImage1D = NULL;
+PFNGLCOMPRESSEDTEXTURESUBIMAGE2DPROC glad_glCompressedTextureSubImage2D = NULL;
+PFNGLCOMPRESSEDTEXTURESUBIMAGE3DPROC glad_glCompressedTextureSubImage3D = NULL;
+PFNGLCOPYBUFFERSUBDATAPROC glad_glCopyBufferSubData = NULL;
+PFNGLCOPYIMAGESUBDATAPROC glad_glCopyImageSubData = NULL;
+PFNGLCOPYNAMEDBUFFERSUBDATAPROC glad_glCopyNamedBufferSubData = NULL;
+PFNGLCOPYPIXELSPROC glad_glCopyPixels = NULL;
+PFNGLCOPYTEXIMAGE1DPROC glad_glCopyTexImage1D = NULL;
+PFNGLCOPYTEXIMAGE2DPROC glad_glCopyTexImage2D = NULL;
+PFNGLCOPYTEXSUBIMAGE1DPROC glad_glCopyTexSubImage1D = NULL;
+PFNGLCOPYTEXSUBIMAGE2DPROC glad_glCopyTexSubImage2D = NULL;
+PFNGLCOPYTEXSUBIMAGE3DPROC glad_glCopyTexSubImage3D = NULL;
+PFNGLCOPYTEXTURESUBIMAGE1DPROC glad_glCopyTextureSubImage1D = NULL;
+PFNGLCOPYTEXTURESUBIMAGE2DPROC glad_glCopyTextureSubImage2D = NULL;
+PFNGLCOPYTEXTURESUBIMAGE3DPROC glad_glCopyTextureSubImage3D = NULL;
+PFNGLCREATEBUFFERSPROC glad_glCreateBuffers = NULL;
+PFNGLCREATEFRAMEBUFFERSPROC glad_glCreateFramebuffers = NULL;
+PFNGLCREATEPROGRAMPROC glad_glCreateProgram = NULL;
+PFNGLCREATEPROGRAMPIPELINESPROC glad_glCreateProgramPipelines = NULL;
+PFNGLCREATEQUERIESPROC glad_glCreateQueries = NULL;
+PFNGLCREATERENDERBUFFERSPROC glad_glCreateRenderbuffers = NULL;
+PFNGLCREATESAMPLERSPROC glad_glCreateSamplers = NULL;
+PFNGLCREATESHADERPROC glad_glCreateShader = NULL;
+PFNGLCREATESHADERPROGRAMVPROC glad_glCreateShaderProgramv = NULL;
+PFNGLCREATETEXTURESPROC glad_glCreateTextures = NULL;
+PFNGLCREATETRANSFORMFEEDBACKSPROC glad_glCreateTransformFeedbacks = NULL;
+PFNGLCREATEVERTEXARRAYSPROC glad_glCreateVertexArrays = NULL;
+PFNGLCULLFACEPROC glad_glCullFace = NULL;
+PFNGLDEBUGMESSAGECALLBACKPROC glad_glDebugMessageCallback = NULL;
+PFNGLDEBUGMESSAGECONTROLPROC glad_glDebugMessageControl = NULL;
+PFNGLDEBUGMESSAGEINSERTPROC glad_glDebugMessageInsert = NULL;
+PFNGLDELETEBUFFERSPROC glad_glDeleteBuffers = NULL;
+PFNGLDELETEFRAMEBUFFERSPROC glad_glDeleteFramebuffers = NULL;
+PFNGLDELETELISTSPROC glad_glDeleteLists = NULL;
+PFNGLDELETEPROGRAMPROC glad_glDeleteProgram = NULL;
+PFNGLDELETEPROGRAMPIPELINESPROC glad_glDeleteProgramPipelines = NULL;
+PFNGLDELETEQUERIESPROC glad_glDeleteQueries = NULL;
+PFNGLDELETERENDERBUFFERSPROC glad_glDeleteRenderbuffers = NULL;
+PFNGLDELETESAMPLERSPROC glad_glDeleteSamplers = NULL;
+PFNGLDELETESHADERPROC glad_glDeleteShader = NULL;
+PFNGLDELETESYNCPROC glad_glDeleteSync = NULL;
+PFNGLDELETETEXTURESPROC glad_glDeleteTextures = NULL;
+PFNGLDELETETRANSFORMFEEDBACKSPROC glad_glDeleteTransformFeedbacks = NULL;
+PFNGLDELETEVERTEXARRAYSPROC glad_glDeleteVertexArrays = NULL;
+PFNGLDEPTHFUNCPROC glad_glDepthFunc = NULL;
+PFNGLDEPTHMASKPROC glad_glDepthMask = NULL;
+PFNGLDEPTHRANGEPROC glad_glDepthRange = NULL;
+PFNGLDEPTHRANGEARRAYVPROC glad_glDepthRangeArrayv = NULL;
+PFNGLDEPTHRANGEINDEXEDPROC glad_glDepthRangeIndexed = NULL;
+PFNGLDEPTHRANGEFPROC glad_glDepthRangef = NULL;
+PFNGLDETACHSHADERPROC glad_glDetachShader = NULL;
+PFNGLDISABLEPROC glad_glDisable = NULL;
+PFNGLDISABLECLIENTSTATEPROC glad_glDisableClientState = NULL;
+PFNGLDISABLEVERTEXARRAYATTRIBPROC glad_glDisableVertexArrayAttrib = NULL;
+PFNGLDISABLEVERTEXATTRIBARRAYPROC glad_glDisableVertexAttribArray = NULL;
+PFNGLDISABLEIPROC glad_glDisablei = NULL;
+PFNGLDISPATCHCOMPUTEPROC glad_glDispatchCompute = NULL;
+PFNGLDISPATCHCOMPUTEINDIRECTPROC glad_glDispatchComputeIndirect = NULL;
+PFNGLDRAWARRAYSPROC glad_glDrawArrays = NULL;
+PFNGLDRAWARRAYSINDIRECTPROC glad_glDrawArraysIndirect = NULL;
+PFNGLDRAWARRAYSINSTANCEDPROC glad_glDrawArraysInstanced = NULL;
+PFNGLDRAWARRAYSINSTANCEDBASEINSTANCEPROC glad_glDrawArraysInstancedBaseInstance = NULL;
+PFNGLDRAWBUFFERPROC glad_glDrawBuffer = NULL;
+PFNGLDRAWBUFFERSPROC glad_glDrawBuffers = NULL;
+PFNGLDRAWELEMENTSPROC glad_glDrawElements = NULL;
+PFNGLDRAWELEMENTSBASEVERTEXPROC glad_glDrawElementsBaseVertex = NULL;
+PFNGLDRAWELEMENTSINDIRECTPROC glad_glDrawElementsIndirect = NULL;
+PFNGLDRAWELEMENTSINSTANCEDPROC glad_glDrawElementsInstanced = NULL;
+PFNGLDRAWELEMENTSINSTANCEDBASEINSTANCEPROC glad_glDrawElementsInstancedBaseInstance = NULL;
+PFNGLDRAWELEMENTSINSTANCEDBASEVERTEXPROC glad_glDrawElementsInstancedBaseVertex = NULL;
+PFNGLDRAWELEMENTSINSTANCEDBASEVERTEXBASEINSTANCEPROC glad_glDrawElementsInstancedBaseVertexBaseInstance = NULL;
+PFNGLDRAWPIXELSPROC glad_glDrawPixels = NULL;
 	glad_glRectdv = (PFNGLRECTDVPROC)load("glRectdv");
 	glad_glRectf = (PFNGLRECTFPROC)load("glRectf");
 	glad_glRectfv = (PFNGLRECTFVPROC)load("glRectfv");
